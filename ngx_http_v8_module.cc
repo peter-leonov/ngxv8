@@ -260,12 +260,12 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     v8lcf->context = Persistent<Context>::New(context);
 
     Context::Scope context_scope(context);
-    Handle<String> mochibase = ReadFile("/home/rykomats/tmp/MochiKit-1.4/lib/MochiKit/Base.js");
+    /*Handle<String> mochibase = ReadFile("/home/rykomats/tmp/MochiKit-1.4/lib/MochiKit/Base.js");
     Handle<Script> mochiscript = Script::Compile(mochibase);
     Handle<Value> mochiresult = mochiscript->Run();
     Handle<String> mochiiter = ReadFile("/home/rykomats/tmp/MochiKit-1.4/lib/MochiKit/Iter.js");
     mochiscript = Script::Compile(mochiiter);
-    mochiresult = mochiscript->Run();
+    mochiresult = mochiscript->Run();*/
     Handle<String> source = ReadFile(reinterpret_cast<const char *>(value[1].data));
     Handle<Script> script = Script::Compile(source);
     Handle<Value> result = script->Run();
