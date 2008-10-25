@@ -24,7 +24,7 @@ typedef struct {
     Persistent<Context> context;
     Persistent<Function> process;
     Persistent<ObjectTemplate> request_tmpl;
-    Persistent<ObjectTemplate> response_tmpl; // Not yet used
+    Persistent<ObjectTemplate> response_tmpl;
 } ngx_http_v8_loc_conf_t;
 
 typedef struct {
@@ -121,6 +121,14 @@ static Handle<Value> GetUri(Local<String> name,
     return String::New(reinterpret_cast<const char*>(uri.data), uri.len);
 }
 
+static Handle<Value> GetUserAgent(Local<String> name,
+                      const AccessorInfo& info)
+{
+    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
+    ngx_str_t agent = r->headers_in.user_agent->value;
+    return String::New(reinterpret_cast<const char*>(agent.data), agent.len);
+
+}
 static Handle<Value> GetArgs(Local<String> name,
                       const AccessorInfo& info)
 {
@@ -129,20 +137,50 @@ static Handle<Value> GetArgs(Local<String> name,
     return String::New(reinterpret_cast<const char*>(args.data), args.len);
 }
 
-static Handle<ObjectTemplate> MakeRequestTemplate()
+static Handle<Value> GetRespContentType(Local<String> name,
+                      const AccessorInfo& info)
+{
+    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
+    return String::New(reinterpret_cast<const char*>(r->headers_out.content_type.data),
+        r->headers_out.content_type.len);
+}
+
+void SetRespContentType(Local<String> name,
+                      Local<Value> val,
+                      const AccessorInfo& info)
+{
+    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
+    String::Utf8Value value(val);
+    size_t len = strlen(*value);
+    u_char *p = static_cast<u_char*>(ngx_pnalloc(r->pool, len));
+    ngx_memcpy(p, *value, len);
+    r->headers_out.content_type.data = p;
+    r->headers_out.content_type.len = len;
+}
+
+static Handle<ObjectTemplate> MakeResponseTemplate()
 {
     HandleScope handle_scope;
     Handle<ObjectTemplate> result = ObjectTemplate::New();
     result->SetInternalFieldCount(2);
-    result->SetAccessor(String::NewSymbol("uri"), GetUri);
-    result->SetAccessor(String::NewSymbol("args"), GetArgs);
     result->Set(String::New("write"), FunctionTemplate::New(Write));
+    result->SetAccessor(String::NewSymbol("contentType"), GetRespContentType, SetRespContentType);
+    return handle_scope.Close(result);
+}
+
+static Handle<ObjectTemplate> MakeRequestTemplate()
+{
+    HandleScope handle_scope;
+    Handle<ObjectTemplate> result = ObjectTemplate::New();
+    result->SetInternalFieldCount(1);
+    result->SetAccessor(String::NewSymbol("uri"), GetUri);
+    result->SetAccessor(String::NewSymbol("userAgent"), GetUserAgent);
+    result->SetAccessor(String::NewSymbol("args"), GetArgs);
     return handle_scope.Close(result);
 }
 
 static Handle<Object> WrapRequest(ngx_http_v8_loc_conf_t *v8lcf,
-                           ngx_http_request_t *r,
-                           brigade_t *b)
+                           ngx_http_request_t *r)
 {
     HandleScope handle_scope;
     if (v8lcf->request_tmpl.IsEmpty()) {
@@ -150,6 +188,22 @@ static Handle<Object> WrapRequest(ngx_http_v8_loc_conf_t *v8lcf,
         v8lcf->request_tmpl = Persistent<ObjectTemplate>::New(raw_template);
     }
     Handle<ObjectTemplate> tmpl = v8lcf->request_tmpl;
+    Handle<Object> result = tmpl->NewInstance();
+    Handle<External> request_ptr = External::New(r);
+    result->SetInternalField(0, request_ptr);
+    return handle_scope.Close(result);
+}
+
+static Handle<Object> WrapResponse(ngx_http_v8_loc_conf_t *v8lcf,
+                           ngx_http_request_t *r,
+                           brigade_t *b)
+{
+    HandleScope handle_scope;
+    if (v8lcf->response_tmpl.IsEmpty()) {
+        Handle<ObjectTemplate> raw_template = MakeResponseTemplate();
+        v8lcf->response_tmpl = Persistent<ObjectTemplate>::New(raw_template);
+    }
+    Handle<ObjectTemplate> tmpl = v8lcf->response_tmpl;
     Handle<Object> result = tmpl->NewInstance();
     Handle<External> request_ptr = External::New(r);
     Handle<External> chain_ptr = External::New(b);
@@ -177,16 +231,24 @@ ngx_http_v8_handler(ngx_http_request_t *r)
     //new Locker();
     HandleScope handle_scope;
     Context::Scope context_scope(v8lcf->context);
-    Handle<Object> request_obj = WrapRequest(v8lcf, r, &b);
-    Handle<Value> argv[1] = { request_obj };
-    Handle<Value> result = v8lcf->process->Call(v8lcf->context->Global(), 1, argv);
+    Handle<Object> request_obj = WrapRequest(v8lcf, r);
+    Handle<Object> response_obj = WrapResponse(v8lcf, r, &b);
+    Handle<Value> argv[2] = { request_obj, response_obj };
+    Handle<Value> result = v8lcf->process->Call(v8lcf->context->Global(), 2, argv);
 
-    r->headers_out.status = NGX_HTTP_OK;
-    r->headers_out.content_type.len = sizeof("text/html; charset=utf-8") - 1;
-    r->headers_out.content_type.data = reinterpret_cast<u_char *>(
-        const_cast<char *>("text/html; charset=utf-8"));
+    r->headers_out.status = result->IsUndefined() ? NGX_HTTP_OK : result->Int32Value();
+    if (r->headers_out.content_type.data == NULL) {
+        r->headers_out.content_type.len = sizeof("text/html; charset=utf-8") - 1;
+        r->headers_out.content_type.data = reinterpret_cast<u_char *>(
+            const_cast<char *>("text/html; charset=utf-8"));
+    }
     rc = ngx_http_send_header(r);
 
+    if (b.head == NULL) {
+        ngx_http_send_special(r, NGX_HTTP_LAST);
+        ngx_http_finalize_request(r, NGX_HTTP_OK);
+        return NGX_DONE;
+    }
     return ngx_http_output_filter(r, b.head);
 }
 
