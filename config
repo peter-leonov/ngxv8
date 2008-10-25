@@ -2,4 +2,4 @@ ngx_addon_name=ngx_http_v8_module
 HTTP_MODULES="$HTTP_MODULES ngx_http_v8_module"
 NGX_ADDON_SRCS="$NGX_ADDON_SRCS $ngx_addon_dir/ngx_http_v8_module.cc"
 CORE_INCS="/home/rykomats/sandbox/v8/include $CORE_INCS"
-CORE_LIBS="-L/home/rykomats/sandbox/v8 -lv8 $CORE_LIBS"
+CORE_LIBS="-L/home/rykomats/sandbox/v8 -lv8 -lstdc++ $CORE_LIBS"
