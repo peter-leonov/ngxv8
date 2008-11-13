@@ -1,0 +1,16 @@
+<html>
+  <head>
+    <title>Welcome to my Homepage</title>
+  </head>
+  <body>
+    <h1>ようこそ<?cs var:family ?>家のホームページへ</h1>
+    <p>あなたは<?cs var:count ?>人目のお客様です。</p>
+    <h2>構成員</h2>
+    <ul>
+    <?cs each:item = child ?>
+      <li><?cs var:item.name ?> (<?cs var:item.age ?>歳)</li>
+    <?cs /each ?>
+    </ul>
+    <p><small><?cs var:today ?></small></p>
+  </body>
+</html>
