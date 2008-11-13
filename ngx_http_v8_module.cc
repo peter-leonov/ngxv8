@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <v8.h>
+#include <dlfcn.h>
 #include <iostream>
 
 using namespace std;
@@ -14,6 +15,7 @@ using namespace v8;
 extern ngx_module_t  ngx_http_v8_module;
 
 static char *ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_v8com(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void *ngx_http_v8_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 static Handle<Value> Log(const Arguments& args);
@@ -23,6 +25,8 @@ static void *Unwrap(Handle<Object> obj, int field);
 typedef struct {
     Persistent<Context> context;
     Persistent<Function> process;
+    Persistent<ObjectTemplate> classes;
+    Persistent<ObjectTemplate> interfaces;
     Persistent<ObjectTemplate> request_tmpl;
     Persistent<ObjectTemplate> response_tmpl;
 } ngx_http_v8_loc_conf_t;
@@ -37,6 +41,13 @@ static ngx_command_t  ngx_http_v8_commands[] = {
     { ngx_string("v8"),
         NGX_HTTP_LOC_CONF|NGX_HTTP_LMT_CONF|NGX_CONF_TAKE1,
         ngx_http_v8,
+        NGX_HTTP_LOC_CONF_OFFSET,
+        0,
+        NULL },
+
+    { ngx_string("v8com"),
+        NGX_HTTP_LOC_CONF|NGX_HTTP_LMT_CONF|NGX_CONF_TAKE1,
+        ngx_http_v8com,
         NGX_HTTP_LOC_CONF_OFFSET,
         0,
         NULL },
@@ -73,25 +84,6 @@ ngx_module_t  ngx_http_v8_module = {
     NULL,                          /* exit master */
     NGX_MODULE_V1_PADDING
 };
-
-static void *
-ngx_http_v8_create_loc_conf(ngx_conf_t *cf)
-{
-    ngx_http_v8_loc_conf_t *conf;
-
-    conf = static_cast<ngx_http_v8_loc_conf_t*>(
-        ngx_pcalloc(cf->pool, sizeof(ngx_http_v8_loc_conf_t)));
-    if (conf == NULL) {
-        return NGX_CONF_ERROR;
-    }
-    return conf;
-}
-
-static char*
-ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
-{
-    return NGX_CONF_OK;
-}
 
 static Handle<String> ReadFile(const string& name) {
     FILE* file = fopen(name.c_str(), "rb");
@@ -301,6 +293,41 @@ static Handle<Value> Log(const Arguments& args)
     return Undefined();
 }
 
+static Handle<Value> Lookup(const Arguments& args) 
+{
+    return Undefined();
+}
+
+/*static Handle<ObjectTemplate> createV8Com()
+{
+    HandleScope scope;
+    Handle<ObjectTemplate> v8com = ObjectTemplate::New();
+    Handle<ObjectTemplate> components = ObjectTemplate::New();
+    Handle<ObjectTemplate> classes = ObjectTemplate::New();
+    Handle<ObjectTemplate> interfaces = ObjectTemplate::New();
+    return scope.Close(v8com);
+}*/
+
+static void *
+ngx_http_v8_create_loc_conf(ngx_conf_t *cf)
+{
+    ngx_http_v8_loc_conf_t   *conf;
+
+    conf = static_cast<ngx_http_v8_loc_conf_t*>(
+        ngx_pcalloc(cf->pool, sizeof(ngx_http_v8_loc_conf_t)));
+    if (conf == NULL) {
+        return NGX_CONF_ERROR;
+    }
+
+    return conf;
+}
+
+static char*
+ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+{
+    return NGX_CONF_OK;
+}
+
 static char *
 ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -317,7 +344,13 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     HandleScope handle_scope;
     Handle<ObjectTemplate> global = ObjectTemplate::New();
+    Handle<ObjectTemplate> components = ObjectTemplate::New();
     global->Set(String::New("log"), FunctionTemplate::New(Log));
+    components->Set(String::New("classes"), v8lcf->classes);
+    components->Set(String::New("interfaces"), v8lcf->interfaces);
+    components->Set(String::New("lookup"), FunctionTemplate::New(Lookup));
+    global->Set(String::New("Components"), components);
+    
     Handle<Context> context = Context::New(NULL, global);
     v8lcf->context = Persistent<Context>::New(context);
 
@@ -335,6 +368,37 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     Handle<Value> process_val = context->Global()->Get(process_name);
     Handle<Function> process_fun = Handle<Function>::Cast(process_val);
     v8lcf->process = Persistent<Function>::New(process_fun);
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_v8com(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_http_v8_loc_conf_t     *v8lcf;
+    ngx_str_t                  *value;
+    void                       *handle;
+
+    v8lcf = static_cast<ngx_http_v8_loc_conf_t *>(conf);
+    value = static_cast<ngx_str_t *>(cf->args->elts);
+
+    HandleScope handle_scope;
+    if (v8lcf->classes.IsEmpty()) {
+        Handle<ObjectTemplate> classes = ObjectTemplate::New();
+        v8lcf->classes = Persistent<ObjectTemplate>::New(classes);
+    }
+    if (v8lcf->interfaces.IsEmpty()) {
+        Handle<ObjectTemplate> interfaces = ObjectTemplate::New();
+        v8lcf->interfaces = Persistent<ObjectTemplate>::New(interfaces);
+    }
+
+    handle = dlopen(reinterpret_cast<const char *>(value[1].data), RTLD_LAZY);
+    Handle<String>(*getName)();
+    Handle<Template>(*createObject)();
+    getName = reinterpret_cast<Handle<String> (*)()>(dlsym(handle, "getName"));
+    createObject = reinterpret_cast<Handle<Template> (*)()>(dlsym(handle, "createObject"));
+    v8lcf->classes->Set(getName(), createObject());
+    //dlclose(handle);
 
     return NGX_CONF_OK;
 }
