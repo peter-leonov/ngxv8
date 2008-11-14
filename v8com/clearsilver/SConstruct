@@ -1,0 +1,19 @@
+CPPPATH = [
+    '/Users/rykomats/sandbox/v8/include',
+    '/Users/rykomats/build/clearsilver/include/ClearSilver'
+]
+
+LIBPATH = [
+    '/Users/rykomats/sandbox/v8',
+    '/Users/rykomats/build/clearsilver/lib'
+]
+
+LIBS = [
+    'v8',
+    'neo_cs',
+    'neo_utl',
+    'stdc++'
+]
+
+env = Environment(CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env.SharedLibrary('clearsilver', ['clearsilver.cc'])

@@ -1,0 +1,18 @@
+CPPPATH = [
+    '/Users/rykomats/sandbox/v8/include',
+    '/Users/rykomats/build/tokyocabinet/include'
+]
+
+LIBPATH = [
+    '/Users/rykomats/sandbox/v8',
+    '/Users/rykomats/build/tokyocabinet/lib'
+]
+
+LIBS = [
+    'v8',
+    'tokyocabinet',
+    'stdc++'
+]
+
+env = Environment(CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env.SharedLibrary('tchdb', ['tchdb.cc'])
