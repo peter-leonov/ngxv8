@@ -20,7 +20,12 @@ static void *ngx_http_v8_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 static Handle<Value> Log(const Arguments& args);
 static Handle<Value> Write(const Arguments& args);
+static Handle<Value> ReadBody(const Arguments& args);
 static void *Unwrap(Handle<Object> obj, int field);
+
+typedef struct {
+    Persistent<Function> fun;
+} function_t;
 
 typedef struct {
     Persistent<Context> context;
@@ -35,6 +40,11 @@ typedef struct {
     ngx_chain_t *head;
     ngx_chain_t *last;
 } brigade_t;
+
+typedef struct {
+    function_t *next;
+    ngx_uint_t done;
+} ngx_http_v8_ctx_t;
 
 static ngx_command_t  ngx_http_v8_commands[] = {
 
@@ -113,20 +123,61 @@ static Handle<Value> GetUri(Local<String> name,
     return String::New(reinterpret_cast<const char*>(uri.data), uri.len);
 }
 
+static Handle<Value> GetMethod(Local<String> name,
+                      const AccessorInfo& info)
+{
+    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
+    return String::New(reinterpret_cast<const char*>(r->method_name.data), r->method_name.len);
+}
+
 static Handle<Value> GetUserAgent(Local<String> name,
                       const AccessorInfo& info)
 {
     ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
     ngx_str_t agent = r->headers_in.user_agent->value;
     return String::New(reinterpret_cast<const char*>(agent.data), agent.len);
-
 }
+
 static Handle<Value> GetArgs(Local<String> name,
                       const AccessorInfo& info)
 {
     ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
     ngx_str_t args = r->args;
     return String::New(reinterpret_cast<const char*>(args.data), args.len);
+}
+
+static Handle<Value> GetBody(Local<String> name,
+                      const AccessorInfo& info)
+{
+    size_t len;
+    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
+    if (r->request_body == NULL
+        || r->request_body->temp_file
+        || r->request_body->bufs == NULL) {
+        return Undefined();
+    }
+
+    len = r->request_body->bufs->buf->last - r->request_body->bufs->buf->pos;
+
+    if (len == 0) {
+        return Undefined();
+    }
+
+    return String::New(reinterpret_cast<const char*>(r->request_body->bufs->buf->pos), len);
+}
+
+static Handle<Value> GetBodyFile(Local<String> name,
+                      const AccessorInfo& info)
+{
+    size_t len;
+    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
+
+    if (r->request_body == NULL
+        || r->request_body->temp_file == NULL) {
+        return Undefined();
+    }
+
+    return String::New(reinterpret_cast<const char*>(r->request_body->temp_file->file.name.data), r->request_body->temp_file->file.name.len);
 }
 
 static Handle<Value> GetRespContentType(Local<String> name,
@@ -166,8 +217,12 @@ static Handle<ObjectTemplate> MakeRequestTemplate()
     Handle<ObjectTemplate> result = ObjectTemplate::New();
     result->SetInternalFieldCount(1);
     result->SetAccessor(String::NewSymbol("uri"), GetUri);
+    result->SetAccessor(String::NewSymbol("method"), GetMethod);
     result->SetAccessor(String::NewSymbol("userAgent"), GetUserAgent);
     result->SetAccessor(String::NewSymbol("args"), GetArgs);
+    result->SetAccessor(String::NewSymbol("body"), GetBody);
+    result->SetAccessor(String::NewSymbol("bodyFile"), GetBodyFile);
+    result->Set(String::New("readBody"), FunctionTemplate::New(ReadBody));
     return handle_scope.Close(result);
 }
 
@@ -210,38 +265,151 @@ static void *Unwrap(Handle<Object> obj, int field)
 }
 
 static ngx_int_t
-ngx_http_v8_handler(ngx_http_request_t *r)
-{
-    ngx_int_t rc;
-    brigade_t b;
-    ngx_http_v8_loc_conf_t *v8lcf;
+ngx_http_v8_call_handler(
+    ngx_http_request_t *r,
+    ngx_http_v8_loc_conf_t *v8lcf,
+    Persistent<Function> fun,
+    brigade_t *b
+) {
+    int32_t status;
+    ngx_connection_t  *c;
 
-    v8lcf = static_cast<ngx_http_v8_loc_conf_t *>(
-        ngx_http_get_module_loc_conf(r, ngx_http_v8_module));
+    c = r->connection;
 
-    b.head = b.last = NULL;
     //new Locker();
     HandleScope handle_scope;
     Context::Scope context_scope(v8lcf->context);
     Handle<Object> request_obj = WrapRequest(v8lcf, r);
-    Handle<Object> response_obj = WrapResponse(v8lcf, r, &b);
+    Handle<Object> response_obj = WrapResponse(v8lcf, r, b);
     Handle<Value> argv[2] = { request_obj, response_obj };
-    Handle<Value> result = v8lcf->process->Call(v8lcf->context->Global(), 2, argv);
-
-    r->headers_out.status = result->IsUndefined() ? NGX_HTTP_OK : result->Int32Value();
-    if (r->headers_out.content_type.data == NULL) {
-        r->headers_out.content_type.len = sizeof("text/html; charset=utf-8") - 1;
-        r->headers_out.content_type.data = reinterpret_cast<u_char *>(
-            const_cast<char *>("text/html; charset=utf-8"));
+    TryCatch trycatch;
+    Handle<Value> result = fun->Call(v8lcf->context->Global(), 2, argv);
+    if (result.IsEmpty()) {
+        Handle<Value> exception = trycatch.Exception();
+        String::AsciiValue exception_str(exception);
+        cout << *exception_str << endl;
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
-    rc = ngx_http_send_header(r);
 
-    if (b.head == NULL) {
-        ngx_http_send_special(r, NGX_HTTP_LAST);
-        ngx_http_finalize_request(r, NGX_HTTP_OK);
+    if (c->destroyed) {
         return NGX_DONE;
     }
-    return ngx_http_output_filter(r, b.head);
+
+    if (result->IsUndefined()) {
+        return NGX_OK;
+    }
+
+    status = result->Int32Value();
+
+    return (ngx_int_t) status;
+}
+
+void
+ngx_http_v8_handle_request(ngx_http_request_t *r)
+{
+    cout << "ngx_http_v8_handle_request: " << r->uri.data << endl;
+    ngx_int_t rc;
+    ngx_http_v8_ctx_t      *ctx;
+    ngx_http_v8_loc_conf_t *v8lcf;
+    Persistent<Function>   fun;
+    brigade_t b;
+
+    b.head = b.last = NULL;
+
+    ctx = static_cast<ngx_http_v8_ctx_t *>(
+        ngx_http_get_module_ctx(r, ngx_http_v8_module));
+
+    if (ctx == NULL) {
+        ctx = static_cast<ngx_http_v8_ctx_t*>(
+            ngx_pcalloc(r->pool, sizeof(ngx_http_v8_ctx_t)));
+        if (ctx == NULL) {
+            //todo
+        }
+        ngx_http_set_ctx(r, ctx, ngx_http_v8_module);
+    }
+
+    v8lcf = static_cast<ngx_http_v8_loc_conf_t *>(
+        ngx_http_get_module_loc_conf(r, ngx_http_v8_module));
+
+    if (ctx->next == NULL) {
+        fun = v8lcf->process;
+    } else {
+        fun = ctx->next->fun;
+        ctx->next = NULL;
+    }
+
+    rc = ngx_http_v8_call_handler(r, v8lcf, fun, &b);
+    cout << "ngx_http_v8_call_handler returns: " << rc << endl;
+
+    if (rc == NGX_DONE) {
+        return;
+    }
+
+    if (rc > 600) {
+        rc = NGX_OK;
+    }
+
+    if (ctx->done || ctx->next) {
+        return;
+    }
+
+    if (rc == NGX_OK || rc == NGX_HTTP_OK) {
+        r->headers_out.status = rc;
+        if (r->headers_out.content_type.data == NULL) {
+            r->headers_out.content_type.len = sizeof("text/html; charset=utf-8") - 1;
+            r->headers_out.content_type.data = reinterpret_cast<u_char *>(
+                const_cast<char *>("text/html; charset=utf-8"));
+        }
+        ngx_http_send_header(r);
+
+        if (b.head) {
+            ngx_http_output_filter(r, b.head);
+        }
+
+        ngx_http_send_special(r, NGX_HTTP_LAST);
+        ctx->done = 1;
+    }
+
+    ngx_http_finalize_request(r, rc);
+}
+
+static ngx_int_t
+ngx_http_v8_handler(ngx_http_request_t *r)
+{
+    cout << "ngx_http_v8_handler" << endl;
+    ngx_http_v8_handle_request(r);
+    return NGX_DONE;
+}
+
+
+static Handle<Value> ReadBody(const Arguments& args)
+{
+    ngx_http_request_t *r;
+    ngx_http_v8_ctx_t *ctx;
+    ngx_int_t rc;
+
+    HandleScope scope;
+    Handle<Object> self = args.This();
+    Handle<Function> post_fun = Handle<Function>::Cast(args[0]);
+
+    r = static_cast<ngx_http_request_t*>(Unwrap(self, 0));
+    ctx = static_cast<ngx_http_v8_ctx_t *>(
+        ngx_http_get_module_ctx(r, ngx_http_v8_module));
+    ctx->next = static_cast<function_t *>(
+        ngx_pcalloc(r->pool, sizeof(function_t)));
+    ctx->next->fun = Persistent<Function>::New(post_fun);
+
+    r->request_body_in_single_buf = 1;
+    r->request_body_in_persistent_file = 1;
+    r->request_body_in_clean_file = 1;
+
+    if (r->request_body_in_file_only) {
+        r->request_body_file_log_level = 0;
+    }
+
+    ngx_http_read_client_request_body(r, ngx_http_v8_handle_request);
+
+    return Integer::New(0);
 }
 
 static Handle<Value> Write(const Arguments& args)
@@ -355,12 +523,12 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     v8lcf->context = Persistent<Context>::New(context);
 
     Context::Scope context_scope(context);
-    /*Handle<String> mochibase = ReadFile("/home/rykomats/tmp/MochiKit-1.4/lib/MochiKit/Base.js");
+    Handle<String> mochibase = ReadFile("scripts/MochiKit/Base.js");
     Handle<Script> mochiscript = Script::Compile(mochibase);
     Handle<Value> mochiresult = mochiscript->Run();
-    Handle<String> mochiiter = ReadFile("/home/rykomats/tmp/MochiKit-1.4/lib/MochiKit/Iter.js");
+    Handle<String> mochiiter = ReadFile("scripts/MochiKit/Iter.js");
     mochiscript = Script::Compile(mochiiter);
-    mochiresult = mochiscript->Run();*/
+    mochiresult = mochiscript->Run();
     Handle<String> source = ReadFile(reinterpret_cast<const char *>(value[1].data));
     Handle<Script> script = Script::Compile(source);
     Handle<Value> result = script->Run();

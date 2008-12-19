@@ -1,11 +1,11 @@
 CPPPATH = [
-    '/Users/rykomats/sandbox/v8/include',
-    '/Users/rykomats/build/clearsilver/include/ClearSilver'
+    '/home/rykomats/sandbox/v8/include',
+    '/opt/clearsilver-0.10.5/include/ClearSilver'
 ]
 
 LIBPATH = [
-    '/Users/rykomats/sandbox/v8',
-    '/Users/rykomats/build/clearsilver/lib'
+    '/opt/lib',
+    '/opt/clearsilver-0.10.5/lib'
 ]
 
 LIBS = [

@@ -1,9 +1,7 @@
 #include <ClearSilver.h>
 #include "clearsilver.h"
-#include <iostream>
 
 using namespace v8;
-using namespace std;
 
 static NEOERR *output(void *ctx, char *s) {
     HandleScope scope;
@@ -46,7 +44,6 @@ static Handle<Value> Render(const Arguments& args)
     Handle<Value> field = args.This()->GetInternalField(1);
     CSPARSE *parse = reinterpret_cast<CSPARSE *>(Handle<External>::Cast(field)->Value());
     Handle<Value> fun = args[0];
-    Handle<Function> f = Handle<Function>::Cast(fun);
     cs_render(parse, &fun, output);
     return True();
 }

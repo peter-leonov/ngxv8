@@ -6,15 +6,19 @@
 #include "tchdb.h"
 
 using namespace v8;
-using namespace std;
 
 static Handle<Value> Initialize(const Arguments& args)
 {
+    bool rc;
     HandleScope scope;
     String::Utf8Value fname(args[0]);
     TCHDB *tchdb = tchdbnew();
     tchdbsetmutex(tchdb);
-    tchdbopen(tchdb, *fname, HDBOWRITER | HDBOREADER | HDBOCREAT);
+    rc = tchdbopen(tchdb, *fname, HDBOWRITER | HDBOREADER | HDBOCREAT);
+    if (!rc) {
+        ThrowException(String::New(tchdberrmsg(tchdbecode(tchdb))));
+        return False();
+    }
     Handle<External> tchdb_ptr = External::New(tchdb);
     args.This()->SetInternalField(0, tchdb_ptr);
     return True();

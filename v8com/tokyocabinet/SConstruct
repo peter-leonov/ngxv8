@@ -1,11 +1,11 @@
 CPPPATH = [
-    '/Users/rykomats/sandbox/v8/include',
-    '/Users/rykomats/build/tokyocabinet/include'
+    '/home/rykomats/sandbox/v8/include',
+    '/home/rykomats/build/tokyocabinet/include'
 ]
 
 LIBPATH = [
-    '/Users/rykomats/sandbox/v8',
-    '/Users/rykomats/build/tokyocabinet/lib'
+    '/home/rykomats/sandbox/v8',
+    '/home/rykomats/build/tokyocabinet/lib'
 ]
 
 LIBS = [
