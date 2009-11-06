@@ -18,7 +18,7 @@ static char *ngx_http_v8com(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void *ngx_http_v8_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
 static Handle<Value> Log(const Arguments& args);
-//static Handle<Value> BindPool(const Arguments& args);
+static Handle<Value> BindPool(const Arguments& args);
 static Handle<Value> ReadBody(const Arguments& args);
 static Handle<Value> Write(const Arguments& args);
 static Handle<Value> AddResponseHeader(const Arguments& args);
@@ -27,6 +27,12 @@ static void *Unwrap(Handle<Object> obj, int field);
 typedef struct {
     Persistent<Function> fun;
 } function_t;
+
+typedef struct {
+    Persistent<Object> recv;
+    Persistent<Function> fun;
+} method_t;
+
 
 typedef struct {
     ngx_chain_t *head;
@@ -245,7 +251,7 @@ static Handle<ObjectTemplate> MakeRequestTemplate()
     result->SetAccessor(String::NewSymbol("args"), GetArgs);
     result->SetAccessor(String::NewSymbol("body"), GetBody);
     result->SetAccessor(String::NewSymbol("bodyFile"), GetBodyFile);
-    //result->Set(String::New("bind"), FunctionTemplate::New(BindPool));
+    result->Set(String::New("bind"), FunctionTemplate::New(BindPool));
     result->Set(String::New("readBody"), FunctionTemplate::New(ReadBody));
     return scope.Close(result);
 }
@@ -413,16 +419,13 @@ ngx_http_v8_handler(ngx_http_request_t *r)
     return NGX_DONE;
 }
 
-/*typedef struct {
-    Persistent<Object> recv;
-    Persistent<Function> fun;
-} method_t;
-
 static void clean(void *data)
 {
-    method_t *m;
-    m = static_cast<method_t *>(data);
-    m->fun->Call(m->recv, 0, NULL);
+    method_t *m = static_cast<method_t *>(data);
+    HandleScope scope;
+    Local<Value> v = m->fun->Call(m->recv, 0, NULL);
+    m->recv.Dispose();
+    m->fun.Dispose();
 }
 
 static Handle<Value> BindPool(const Arguments& args)
@@ -435,17 +438,17 @@ static Handle<Value> BindPool(const Arguments& args)
     m = static_cast<method_t *>(ngx_pcalloc(r->pool, sizeof(method_t)));
 
     HandleScope scope;
-    Local<Object> o = Local<Object>::Cast(args[0]);
-    Local<Function> dest = Local<Function>::Cast(o->Get(String::New("dispose")));
-    m->recv = Persistent<Object>::New(o);
-    m->fun = Persistent<Function>::New(dest);
+    Local<Function> f = Local<Function>::Cast(Local<Object>::Cast(args[0]));
+    Local<Object> recv = Local<Object>::Cast(args[1]);
+    m->fun = Persistent<Function>::New(f);
+    m->recv = Persistent<Object>::New(recv);
 
     c = ngx_pool_cleanup_add(r->pool, 0);
     c->data = m;
     c->handler = &clean;
 
-    return args[0];
-}*/
+    return args[1];
+}
 
 static void HandleDispose(Persistent<Value> handle, void *p)
 {
@@ -565,8 +568,7 @@ static Handle<Value> Log(const Arguments& args)
     HandleScope scope;
     Handle<Value> arg = args[0];
     String::Utf8Value value(arg);
-    //cout << (*value) << endl;
-    printf("%s\n", *value);
+    cout << (*value) << endl;
     return Undefined();
 }
 
@@ -635,7 +637,11 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         xhrPrototype->Set(String::New("open"), FunctionTemplate::New(xhr::Open));
         xhrPrototype->Set(String::New("send"), FunctionTemplate::New(xhr::Send));
         global->Set(String::New("XMLHttpRequest"), xhr);*/
-        v8lcf->context = Context::New(NULL, global);
+        const char *extensionNames[] = { "v8/gc" };
+        ExtensionConfiguration extensions(sizeof(extensionNames)/sizeof(extensionNames[0]),
+                                          extensionNames);
+        //v8lcf->context = Context::New(NULL, global);
+        v8lcf->context = Context::New(&extensions, global);
     }
 
     Context::Scope context_scope(v8lcf->context);

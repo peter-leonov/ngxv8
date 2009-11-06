@@ -1,0 +1,12 @@
+<html>
+<body>
+<table border="1">
+[% FOREACH elements e \%]
+<tr>
+  <td>[% e.id ENC XML %]</td>
+  <td>[% e.name ENC XML %]</td>
+</tr>
+[% END \%]
+</table>
+</body>
+</html>
