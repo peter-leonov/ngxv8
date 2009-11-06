@@ -1,6 +1,6 @@
 CPPPATH = [
-    '/home/rykomats/sandbox/v8/include',
-    '/home/rykomats/build/tokyocabinet/include'
+    '/Users/rykomats/sandbox/v8/include',
+    '/Users/rykomats/build/tokyocabinet/include',
 ]
 
 LIBPATH = [
@@ -14,5 +14,5 @@ LIBS = [
     'stdc++'
 ]
 
-env = Environment(CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
-env.SharedLibrary('tchdb', ['tchdb.cc'])
+env = Environment(CCFLAGS='-arch x86_64 -m64', CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env.SharedLibrary('tokyo', ['tokyo.cc'])

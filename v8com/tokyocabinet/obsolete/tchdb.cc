@@ -9,16 +9,11 @@ using namespace v8;
 
 static Handle<Value> Initialize(const Arguments& args)
 {
-    bool rc;
     HandleScope scope;
     String::Utf8Value fname(args[0]);
     TCHDB *tchdb = tchdbnew();
     tchdbsetmutex(tchdb);
-    rc = tchdbopen(tchdb, *fname, HDBOWRITER | HDBOREADER | HDBOCREAT);
-    if (!rc) {
-        ThrowException(String::New(tchdberrmsg(tchdbecode(tchdb))));
-        return False();
-    }
+    tchdbopen(tchdb, *fname, HDBOWRITER | HDBOREADER | HDBOCREAT);
     Handle<External> tchdb_ptr = External::New(tchdb);
     args.This()->SetInternalField(0, tchdb_ptr);
     return True();
