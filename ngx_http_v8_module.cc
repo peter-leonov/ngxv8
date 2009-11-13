@@ -4,7 +4,9 @@ extern "C" {
 #include <ngx_http.h>
 #include <nginx.h>
 }
+//#define V8_TARGET_ARCH_X64 1
 #include <v8.h>
+//#include <../src/v8.h>
 #include <dlfcn.h>
 #include <iostream>
 
@@ -102,7 +104,8 @@ ngx_module_t  ngx_http_v8_module = {
     NGX_MODULE_V1_PADDING
 };
 
-/*namespace xhr {
+/*
+namespace xhr {
 
 static Handle<Value> Initialize(const Arguments& args)
 {
@@ -121,6 +124,11 @@ static Handle<Value> Send(const Arguments& args)
 
 } // end namespace xhr
 */
+
+static void HandleDispose(Persistent<Value> handle, void *p)
+{
+    handle.Dispose();
+}
 
 static Handle<String> ReadFile(const string& name) {
     FILE* file = fopen(name.c_str(), "rb");
@@ -208,6 +216,32 @@ static Handle<Value> GetBodyFile(Local<String> name,
     return String::New(reinterpret_cast<const char*>(temp->data), temp->len);
 }
 
+static Handle<Value> GetVariable(const Arguments& args)
+{
+    ngx_http_request_t          *r;
+    size_t                      len;
+    u_char                      *p, *lowcase;
+    ngx_str_t                   var;
+    ngx_uint_t                  hash;
+    ngx_http_variable_value_t   *vv;
+
+    HandleScope scope;
+    String::AsciiValue name(args[0]);
+    len = strlen(*name);
+    r = static_cast<ngx_http_request_t *>(Unwrap(args.This(), 0));
+    lowcase = static_cast<u_char *>(ngx_pnalloc(r->pool, len));
+    p = reinterpret_cast<u_char *>(*name);
+    hash = ngx_hash_strlow(lowcase, p, len);
+    var.len = len;
+    var.data = lowcase;
+    vv = ngx_http_get_variable(r, &var, hash, 1);
+
+    if (vv->not_found) {
+        return Undefined();
+    }
+    return String::New(reinterpret_cast<const char *>(vv->data), vv->len);
+}
+
 static Handle<Value> GetRespContentType(Local<String> name,
                       const AccessorInfo& info)
 {
@@ -229,21 +263,10 @@ void SetRespContentType(Local<String> name,
     r->headers_out.content_type.len = len;
 }
 
-static Handle<ObjectTemplate> MakeResponseTemplate()
+static Local<ObjectTemplate> MakeRequestTemplate()
 {
     HandleScope scope;
-    Handle<ObjectTemplate> result = ObjectTemplate::New();
-    result->SetInternalFieldCount(2);
-    result->Set(String::New("write"), FunctionTemplate::New(Write));
-    result->Set(String::New("addHeader"), FunctionTemplate::New(AddResponseHeader));
-    result->SetAccessor(String::NewSymbol("contentType"), GetRespContentType, SetRespContentType);
-    return scope.Close(result);
-}
-
-static Handle<ObjectTemplate> MakeRequestTemplate()
-{
-    HandleScope scope;
-    Handle<ObjectTemplate> result = ObjectTemplate::New();
+    Local<ObjectTemplate> result = ObjectTemplate::New();
     result->SetInternalFieldCount(1);
     result->SetAccessor(String::NewSymbol("uri"), GetUri);
     result->SetAccessor(String::NewSymbol("method"), GetMethod);
@@ -251,41 +274,48 @@ static Handle<ObjectTemplate> MakeRequestTemplate()
     result->SetAccessor(String::NewSymbol("args"), GetArgs);
     result->SetAccessor(String::NewSymbol("body"), GetBody);
     result->SetAccessor(String::NewSymbol("bodyFile"), GetBodyFile);
+    result->Set(String::New("$"), FunctionTemplate::New(GetVariable));
     result->Set(String::New("bind"), FunctionTemplate::New(BindPool));
     result->Set(String::New("readBody"), FunctionTemplate::New(ReadBody));
     return scope.Close(result);
 }
 
-static Handle<Object> WrapRequest(ngx_http_v8_loc_conf_t *v8lcf,
+static Local<ObjectTemplate> MakeResponseTemplate()
+{
+    HandleScope scope;
+    Local<ObjectTemplate> result = ObjectTemplate::New();
+    result->SetInternalFieldCount(2);
+    result->Set(String::New("write"), FunctionTemplate::New(Write));
+    result->Set(String::New("addHeader"), FunctionTemplate::New(AddResponseHeader));
+    result->SetAccessor(String::NewSymbol("contentType"), GetRespContentType, SetRespContentType);
+    return scope.Close(result);
+}
+
+static Local<Object> WrapRequest(ngx_http_v8_loc_conf_t *v8lcf,
                            ngx_http_request_t *r)
 {
     HandleScope scope;
     if (v8lcf->request_tmpl.IsEmpty()) {
-        Handle<ObjectTemplate> raw_template = MakeRequestTemplate();
-        v8lcf->request_tmpl = Persistent<ObjectTemplate>::New(raw_template);
+        Local<ObjectTemplate> tmpl = MakeRequestTemplate();
+        v8lcf->request_tmpl = Persistent<ObjectTemplate>::New(tmpl);
     }
-    Handle<ObjectTemplate> tmpl = v8lcf->request_tmpl;
-    Handle<Object> result = tmpl->NewInstance();
-    Handle<External> request_ptr = External::New(r);
-    result->SetInternalField(0, request_ptr);
+    Local<Object> result = v8lcf->request_tmpl->NewInstance();
+    result->SetInternalField(0, External::New(r));
     return scope.Close(result);
 }
 
-static Handle<Object> WrapResponse(ngx_http_v8_loc_conf_t *v8lcf,
+static Local<Object> WrapResponse(ngx_http_v8_loc_conf_t *v8lcf,
                            ngx_http_request_t *r,
                            brigade_t *b)
 {
     HandleScope scope;
     if (v8lcf->response_tmpl.IsEmpty()) {
-        Handle<ObjectTemplate> raw_template = MakeResponseTemplate();
-        v8lcf->response_tmpl = Persistent<ObjectTemplate>::New(raw_template);
+        Local<ObjectTemplate> tmpl = MakeResponseTemplate();
+        v8lcf->response_tmpl = Persistent<ObjectTemplate>::New(tmpl);
     }
-    Handle<ObjectTemplate> tmpl = v8lcf->response_tmpl;
-    Handle<Object> result = tmpl->NewInstance();
-    Handle<External> request_ptr = External::New(r);
-    Handle<External> chain_ptr = External::New(b);
-    result->SetInternalField(0, request_ptr);
-    result->SetInternalField(1, chain_ptr);
+    Local<Object> result = v8lcf->response_tmpl->NewInstance();
+    result->SetInternalField(0, External::New(r));
+    result->SetInternalField(1, External::New(b));
     return scope.Close(result);
 }
 
@@ -307,9 +337,11 @@ ngx_int_t ngx_http_v8_call_handler(
 
     Context::Scope context_scope(v8lcf->context);
     HandleScope scope;
-    Handle<Object> request_obj = WrapRequest(v8lcf, r);
-    Handle<Object> response_obj = WrapResponse(v8lcf, r, b);
+
+    Local<Object> request_obj = WrapRequest(v8lcf, r);
+    Local<Object> response_obj = WrapResponse(v8lcf, r, b);
     Handle<Value> argv[2] = { request_obj, response_obj };
+
     TryCatch trycatch;
     Handle<Value> result = fun->Call(v8lcf->context->Global(), 2, argv);
     if (trycatch.HasCaught()) {
@@ -327,6 +359,7 @@ ngx_int_t ngx_http_v8_call_handler(
         return NGX_OK;
     }
 
+    //internal::Heap::CollectAllGarbage(false);
     return static_cast<ngx_int_t>(result->Int32Value());
 }
 
@@ -450,11 +483,6 @@ static Handle<Value> BindPool(const Arguments& args)
     return args[1];
 }
 
-static void HandleDispose(Persistent<Value> handle, void *p)
-{
-    handle.Dispose();
-}
-
 static Handle<Value> ReadBody(const Arguments& args)
 {
     ngx_http_request_t *r;
@@ -470,6 +498,7 @@ static Handle<Value> ReadBody(const Arguments& args)
     ctx->next = static_cast<function_t *>(
         ngx_pcalloc(r->pool, sizeof(function_t)));
     ctx->next->fun = Persistent<Function>::New(post_fun);
+    // TODO: dispose handle when request finished instead of depending on gc
     ctx->next->fun.MakeWeak(NULL, &HandleDispose);
 
     //r->request_body_in_file_only = 1;
@@ -607,6 +636,10 @@ ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     return NGX_CONF_OK;
 }
 
+/*static void GCCall() {
+    cout << "GC" << endl;
+}*/
+
 static char *
 ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -626,10 +659,14 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         Local<ObjectTemplate> global = ObjectTemplate::New();
         Local<ObjectTemplate> components = ObjectTemplate::New();
         global->Set(String::New("log"), FunctionTemplate::New(Log));
+        if (v8lcf->classes.IsEmpty()) {
+            v8lcf->classes = Persistent<ObjectTemplate>::New(ObjectTemplate::New());
+        }
         components->Set(String::New("classes"), v8lcf->classes);
         //components->Set(String::New("interfaces"), v8lcf->interfaces);
         //components->Set(String::New("lookup"), FunctionTemplate::New(Lookup));
         global->Set(String::New("Components"), components);
+
         /*Local<FunctionTemplate> xhr = FunctionTemplate::New(xhr::Initialize);
         xhr->SetClassName(String::New("XMLHttpRequest"));
         Local<ObjectTemplate> xhrInstance = xhr->InstanceTemplate();
@@ -637,6 +674,7 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
         xhrPrototype->Set(String::New("open"), FunctionTemplate::New(xhr::Open));
         xhrPrototype->Set(String::New("send"), FunctionTemplate::New(xhr::Send));
         global->Set(String::New("XMLHttpRequest"), xhr);*/
+
         const char *extensionNames[] = { "v8/gc" };
         ExtensionConfiguration extensions(sizeof(extensionNames)/sizeof(extensionNames[0]),
                                           extensionNames);
@@ -645,6 +683,8 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     Context::Scope context_scope(v8lcf->context);
+
+    //V8::SetGlobalGCEpilogueCallback(GCCall);
 
     Handle<String> source = ReadFile(reinterpret_cast<const char *>(value[1].data));
     Local<Script> script = Script::Compile(source);
