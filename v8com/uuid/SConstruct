@@ -1,18 +1,15 @@
 CPPPATH = [
     '/Users/rykomats/sandbox/v8/include',
-    '/Users/rykomats/build/tokyocabinet-1.4.39/include',
 ]
 
 LIBPATH = [
     '/Users/rykomats/sandbox/v8',
-    '/Users/rykomats/build/tokyocabinet-1.4.39/lib'
 ]
 
 LIBS = [
     'v8',
-    'tokyocabinet',
     'stdc++'
 ]
 
 env = Environment(CCFLAGS='-arch x86_64 -m64 -Wall -O2', CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
-env.SharedLibrary('tokyo', ['tokyo.cc'])
+env.SharedLibrary('uuid', ['uuid.cc'])

@@ -5,25 +5,14 @@
 #include <stdint.h>
 #include "tokyo.h"
 
-#include <iostream>
-
 using namespace std;
 using namespace v8;
-
-static void dump_map(TCMAP *m)
-{
-    const char *k;
-    tcmapiterinit(m);
-    while ((k = tcmapiternext2(m)) != NULL) {
-        printf("1\n");
-    }
-}
 
 namespace tc {
 namespace util {
 namespace tclist {
 
-static Handle<Value> Initialize(const Arguments& args)
+static Handle<Value> New(const Arguments& args)
 {
     HandleScope scope;
     Local<External> list_ptr;
@@ -36,6 +25,28 @@ static Handle<Value> Initialize(const Arguments& args)
     Local<Object> self = args.This();
     self->SetInternalField(0, list_ptr);
     return scope.Close(self);
+}
+
+static Handle<Value> Push(const Arguments& args)
+{
+    HandleScope scope;
+    Local<Value> field = args.This()->GetInternalField(0);
+    TCLIST *list = static_cast<TCLIST *>(Local<External>::Cast(field)->Value());
+    String::Utf8Value value(args[0]);
+    tclistpush2(list, *value);
+    return scope.Close(True());
+}
+
+static Handle<Value> PushList(const Arguments& args)
+{
+    HandleScope scope;
+    Local<Value> field = Local<Object>::Cast(args[0])->GetInternalField(0);
+    TCLIST *l = static_cast<TCLIST *>(Local<External>::Cast(field)->Value());
+
+    field = args.This()->GetInternalField(0);
+    TCLIST *list = static_cast<TCLIST *>(Local<External>::Cast(field)->Value());
+    tclistpushlist(list, l);
+    return scope.Close(True());
 }
 
 static Handle<Value> PushMap(const Arguments& args)
@@ -56,10 +67,11 @@ static Handle<Value> Dispose(const Arguments& args)
     Local<Value> field = args.This()->GetInternalField(0);
     TCLIST *list = static_cast<TCLIST *>(Local<External>::Cast(field)->Value());
     tclistdel(list);
+    //printf("tclist deleted\n");
     return scope.Close(True());
 }
 
-static Handle<Value> Dump(const Arguments& args)
+/*static Handle<Value> Dump(const Arguments& args)
 {
     HandleScope scope;
     Local<Value> field = args.This()->GetInternalField(0);
@@ -72,13 +84,32 @@ static Handle<Value> Dump(const Arguments& args)
         printf("%s\n", kbuf);
     }
     return scope.Close(True());
-}
+}*/
 
 }
 
 namespace tcmap {
 
-static Handle<Value> Initialize(const Arguments& args)
+Persistent<ObjectTemplate> __template__;
+
+/*static Handle<Value> Get(Local<String> name, const AccessorInfo &info)
+{
+    HandleScope scope;
+    Local<Value> field = info.Holder()->GetInternalField(0);
+    TCMAP *map = static_cast<TCMAP *>(Local<External>::Cast(field)->Value());
+    String::Utf8Value key(name);
+    const char *v = tcmapget2(map, *key);
+    return String::New(v);
+    return String::New("");
+}
+
+static Handle<Value> __Set__(Local<String> name, Local<Value> value, const AccessorInfo &info)
+{
+    HandleScope scope;
+    Local<Value> o = Local<Object>::Cast(info.Holder()->GetInternalField(0));
+}*/
+
+static Handle<Value> New(const Arguments& args)
 {
     HandleScope scope;
     TCMAP *map = tcmapnew();
@@ -86,6 +117,16 @@ static Handle<Value> Initialize(const Arguments& args)
     Local<Object> self = args.This();
     self->SetInternalField(0, map_ptr);
     return scope.Close(self);
+}
+
+static Handle<Value> Get(const Arguments& args)
+{
+    HandleScope scope;
+    Local<Value> field = args.This()->GetInternalField(0);
+    TCMAP *map = static_cast<TCMAP *>(Local<External>::Cast(field)->Value());
+    String::Utf8Value key(args[0]);
+    const char *v = tcmapget2(map, *key);
+    return String::New(v);
 }
 
 static Handle<Value> Put(const Arguments& args)
@@ -112,12 +153,26 @@ static Handle<Value> PutList(const Arguments& args)
     return scope.Close(True());
 }
 
+static Handle<Value> PutMap(const Arguments& args)
+{
+    HandleScope scope;
+    String::Utf8Value key(args[0]);
+    Local<Value> field = Local<Object>::Cast(args[1])->GetInternalField(0);
+    TCMAP *m = static_cast<TCMAP *>(Local<External>::Cast(field)->Value());
+
+    field = args.This()->GetInternalField(0);
+    TCMAP *map = static_cast<TCMAP *>(Local<External>::Cast(field)->Value());
+    tcmapputmap(map, *key, m);
+    return scope.Close(True());
+}
+
 static Handle<Value> Dispose(const Arguments& args)
 {
     HandleScope scope;
     Local<Value> field = args.This()->GetInternalField(0);
     TCMAP *map = static_cast<TCMAP *>(Local<External>::Cast(field)->Value());
     tcmapdel(map);
+    //printf("tcmap deleted\n");
     return scope.Close(True());
 }
 
@@ -127,12 +182,12 @@ static Handle<Value> Base64Encode(const Arguments& args)
 {
     HandleScope scope;
     Handle<Array> in = Handle<Array>::Cast(args[0]);
+    int i;
     int length = in->Length();
-    int i = 0;
     char input[length];
     char *buff;
 
-    for (i; i < length; i++) {
+    for (i = 0; i < length; i++) {
         input[i] = static_cast<unsigned char>(in->Get(Number::New(i))->Int32Value());
     }
 
@@ -142,11 +197,35 @@ static Handle<Value> Base64Encode(const Arguments& args)
     return scope.Close(ret);
 }
 
+static Handle<Value> UrlEncode(const Arguments& args)
+{
+    char *encoded;
+    HandleScope scope;
+    String::Utf8Value src(args[0]);
+    encoded = tcurlencode(*src, src.length());
+    Local<String> rv = String::New(encoded);
+    free(encoded);
+    return scope.Close(rv);
+}
+
+static Handle<Value> UrlDecode(const Arguments& args)
+{
+    char *decoded;
+    int siz;
+    HandleScope scope;
+    String::Utf8Value src(args[0]);
+    decoded = tcurldecode(*src, &siz);
+    //Local<String> rv = String::New(decoded, siz);
+    Local<String> rv = String::New(decoded);
+    free(decoded);
+    return scope.Close(rv);
+}
+
 } // end namespace util
 
 namespace tdb {
 
-static Handle<Value> Initialize(const Arguments& args)
+static Handle<Value> New(const Arguments& args)
 {
     HandleScope scope;
     TCTDB *tdb = tctdbnew();
@@ -170,6 +249,30 @@ static Handle<Value> Open(const Arguments& args)
     return rv ? True() : False();
 }
 
+static Handle<Value> Get(const Arguments& args)
+{
+    if (!args[0]->IsString() && !args[0]->IsNumber()) {
+        return Undefined();
+    }
+
+    HandleScope scope;
+    String::Utf8Value pkey(args[0]);
+    Local<Value> field = args.This()->GetInternalField(0);
+    TCTDB *tdb = reinterpret_cast<TCTDB *>(Handle<External>::Cast(field)->Value());
+    TCMAP *cols = tctdbget(tdb, *pkey, pkey.length());
+    const char *name;
+    Local<Object> map;
+    if (cols) {
+        map = Object::New();
+        tcmapiterinit(cols);
+        while ((name = tcmapiternext2(cols)) != NULL) {
+            map->Set(String::New(name), String::New(tcmapget2(cols, name)));
+        }
+        tcmapdel(cols);
+    }
+    return scope.Close(map);
+}
+
 static Handle<Value> Put(const Arguments& args)
 {
     HandleScope scope;
@@ -177,8 +280,9 @@ static Handle<Value> Put(const Arguments& args)
     Handle<Object> cols = Handle<Object>::Cast(args[1]);
     Handle<Array> names = cols->GetPropertyNames();
     TCMAP *map = tcmapnew();
-    int i = 0;
-    for (i; i < names->Length(); i++) {
+    unsigned int i;
+
+    for (i = 0; i < names->Length(); i++) {
         Handle<Value> key = names->Get(Integer::New(i));
         Handle<Value> value =  cols->Get(key);
         tcmapput2(map, *String::Utf8Value(key), *String::Utf8Value(value));
@@ -192,44 +296,6 @@ static Handle<Value> Put(const Arguments& args)
     tcmapdel(map);
     return True();
 }
-/*
-static Handle<Value> Search(const Arguments& args)
-{
-    HandleScope scope;
-    Handle<Value> field = args.This()->GetInternalField(0);
-    TCTDB *tdb = reinterpret_cast<TCTDB *>(Handle<External>::Cast(field)->Value());
-    int i, rsiz;
-    const char *rbuf, *name;
-    TCMAP *cols;
-    TDBQRY *qry;
-    TCLIST *res;
-    Handle<ObjectTemplate> resultTeml = ObjectTemplate::New();
-    Handle<Object> result = resultTeml->NewInstance();
-    qry = tctdbqrynew(tdb);
-    tctdbqryaddcond(qry, "pubstart", TDBQCNUMLE, "1252774800");
-    tctdbqryaddcond(qry, "pubend", TDBQCNUMGE, "1252774800");
-    tctdbqryaddcond(qry, "type", TDBQCSTREQ, "CoverInterviewArticle");
-    tctdbqrysetorder(qry, "pubstart", TDBQONUMDESC);
-    tctdbqrysetmax(qry, 1);
-    res = tctdbqrysearch(qry);
-    for (i = 0; i < tclistnum(res); i++) {
-        rbuf = static_cast<const char *>(tclistval(res, i, &rsiz));
-        cols = tctdbget(tdb, rbuf, rsiz);
-        if (cols) {
-            tcmapiterinit(cols);
-            while ((name = tcmapiternext2(cols)) != NULL) {
-                Handle<String> key = String::New(name);
-                Handle<String> value = String::New(tcmapget2(cols, name));
-                result->Set(key, value);
-            }
-            tcmapdel(cols);
-        }
-    }
-    tclistdel(res);
-    tctdbqrydel(qry);
-    return scope.Close(result);
-}
-*/
 
 static Handle<Value> Close(const Arguments& args)
 {
@@ -237,6 +303,7 @@ static Handle<Value> Close(const Arguments& args)
     Handle<Value> field = args.This()->GetInternalField(0);
     TCTDB *tdb = reinterpret_cast<TCTDB *>(Handle<External>::Cast(field)->Value());
     tctdbclose(tdb);
+    //printf("tdb close\n");
     return True();
 }
 
@@ -253,6 +320,7 @@ static Handle<Value> Dispose(const Arguments& args)
     Handle<Value> field = args.This()->GetInternalField(0);
     TCTDB *tdb = reinterpret_cast<TCTDB *>(Handle<External>::Cast(field)->Value());
     tctdbdel(tdb);
+    //printf("tdb dispose\n");
     return True();
 }
 
@@ -260,7 +328,24 @@ static Handle<Value> Dispose(const Arguments& args)
 
 namespace tdbqry {
 
-static Handle<Value> Initialize(const Arguments& args)
+typedef struct {
+    Local<Function> fun;
+} function_t;
+
+int ProcCallback(const void *pkbuf, int pksiz, TCMAP *cols, void *op)
+{
+    HandleScope scope;
+    Local<Object> map = tc::util::tcmap::__template__->NewInstance();
+    map->SetInternalField(0, External::New(cols));
+    function_t *f = static_cast<function_t *>(op);
+    Local<Object> global = Context::GetCurrent()->Global();
+    //Local<Value> argv[2] = { String::New(static_cast<const char *>(pkbuf), pksiz), map };
+    Local<Value> argv[2] = { String::New(static_cast<const char *>(pkbuf)), map };
+    Local<Value> rv = f->fun->Call(global, 2, argv);
+    return rv->Int32Value();
+}
+
+static Handle<Value> New(const Arguments& args)
 {
     HandleScope scope;
     Handle<Value> field = Handle<Object>::Cast(args[0])->GetInternalField(0);
@@ -284,6 +369,28 @@ static Handle<Value> AddCond(const Arguments& args)
     int32_t op = args[1]->Int32Value();
     //printf("%s,%d,%s,%d\n", *name, op, *expr, TDBQCSTROR);
     tctdbqryaddcond(qry, *name, op, *expr);
+    return args.This();
+}
+
+static Handle<Value> Proc(const Arguments& args)
+{
+    HandleScope scope;
+    Local<Object> o = Local<Object>::Cast(args[0]);
+    Local<Function> fun = Local<Function>::Cast(o);
+    Local<Value> field = args.This()->GetInternalField(0);
+    TDBQRY *qry = reinterpret_cast<TDBQRY *>(Handle<External>::Cast(field)->Value());
+    function_t f;
+    f.fun = fun;
+    tctdbqryproc(qry, ProcCallback, &f);
+    return True();
+}
+
+static Handle<Value> SearchOut(const Arguments& args)
+{
+    HandleScope scope;
+    Local<Value> field = args.This()->GetInternalField(0);
+    TDBQRY *qry = reinterpret_cast<TDBQRY *>(Handle<External>::Cast(field)->Value());
+    tctdbqrysearchout(qry);
     return True();
 }
 
@@ -297,37 +404,29 @@ static Handle<Value> Search(const Arguments& args)
     TCLIST *tkeys = tctdbqrysearch(qry);
     int length = tclistnum(tkeys);
     Handle<Array> result = Array::New(length);
-    Handle<Object> map;// = Object::New();
+    Handle<Object> map;
     TCMAP *cols;
     const char *kbuf, *name;
     int ksiz;
 
     for(int i = 0; i < length; i++){
         kbuf = static_cast<const char *>(tclistval(tkeys, i, &ksiz));
+        //printf("->%s<-%d\n", kbuf, ksiz);
         cols = tctdbget(tdb, kbuf, ksiz);
         if (cols) {
             map = Object::New();
             tcmapiterinit(cols);
+            //map->Set(String::New("Id"), String::New(kbuf, ksiz));
+            map->Set(String::New("Id"), String::New(kbuf));
             while ((name = tcmapiternext2(cols)) != NULL) {
                 map->Set(String::New(name), String::New(tcmapget2(cols, name)));
             }
             tcmapdel(cols);
         }
-        //result->Set(Integer::New(i), String::New(kbuf));
         result->Set(Integer::New(i), map);
     }
     tclistdel(tkeys);
     return scope.Close(result);
-    /*Handle<Value> argv[1] = { External::New(tkeys) };
-    Local<Object> global = Context::GetCurrent()->Global();
-    Local<Object> components = Local<Object>::Cast(global->Get(String::New("Components")));
-    Local<Object> classes = Local<Object>::Cast(components->Get(String::New("classes")));
-    Local<Object> tc = Local<Object>::Cast(classes->Get(getName()));
-    Local<Object> util = Local<Object>::Cast(tc->Get(String::New("util")));
-    Local<Function> tclist = Local<Function>::Cast(util->Get(String::New("TCLIST")));
-    Local<Object> list = tclist->NewInstance(1, argv);
-    tclistdel(tkeys);
-    return scope.Close(list);*/
 }
 
 static Handle<Value> SetLimit(const Arguments& args)
@@ -338,6 +437,7 @@ static Handle<Value> SetLimit(const Arguments& args)
     int32_t max = args[0]->Int32Value();
     int32_t skip = args[1]->Int32Value();
     tctdbqrysetlimit(qry, max, skip);
+    return args.This();
 }
 
 static Handle<Value> SetOrder(const Arguments& args)
@@ -348,7 +448,56 @@ static Handle<Value> SetOrder(const Arguments& args)
     String::Utf8Value name(args[0]);
     int32_t type = args[1]->Int32Value();
     tctdbqrysetorder(qry, *name, type);
-    return True();
+    return args.This();
+}
+
+static Handle<Value> MetaSearch(const Arguments& args)
+{
+    HandleScope scope;
+    Local<Array> others = Local<Array>::Cast(args[0]);
+    int num_qrys = others->Length();
+    int32_t type = args[1]->Int32Value();
+
+    Local<Value> field = args.This()->GetInternalField(0);
+    TDBQRY *qry = static_cast<TDBQRY *>(Local<External>::Cast(field)->Value());
+
+    TDBQRY* qrys[num_qrys+1];
+
+    qrys[0] = qry;
+
+    for (int i = 1; i < num_qrys; i++) {
+        Local<Value> x = Local<Object>::Cast(others->Get(Integer::New(i)))->GetInternalField(0);
+        qrys[i] = static_cast<TDBQRY *>(Local<External>::Cast(x)->Value());
+    }
+
+    field = args.This()->GetInternalField(1);
+    TCTDB *tdb = static_cast<TCTDB *>(Local<External>::Cast(field)->Value());
+    TCLIST *keys = tctdbmetasearch(qrys, num_qrys, type);
+    int length, ksiz;
+    const char *kbuf, *name;
+    TCMAP *cols;
+    length = tclistnum(keys);
+
+    Local<Array> result = Array::New(length);
+    Local<Object> map;
+
+    for (int i = 0; i < length; i++) {
+        kbuf = static_cast<const char *>(tclistval(keys, i, &ksiz));
+        cols = tctdbget(tdb, kbuf, ksiz);
+        if (cols) {
+            map = Object::New();
+            tcmapiterinit(cols);
+            //map->Set(String::New("Id"), String::New(kbuf, ksiz));
+            map->Set(String::New("Id"), String::New(kbuf));
+            while ((name = tcmapiternext2(cols)) != NULL) {
+                map->Set(String::New(name), String::New(tcmapget2(cols, name)));
+            }
+            tcmapdel(cols);
+        }
+        result->Set(Integer::New(i), map);
+    }
+    tclistdel(keys);
+    return scope.Close(result);
 }
 
 static Handle<Value> Dispose(const Arguments& args)
@@ -357,6 +506,7 @@ static Handle<Value> Dispose(const Arguments& args)
     Handle<Value> field = args.This()->GetInternalField(0);
     TDBQRY *qry = reinterpret_cast<TDBQRY *>(Handle<External>::Cast(field)->Value());
     tctdbqrydel(qry);
+    //printf("tdbqry dispose\n");
     return True();
 }
 
@@ -364,7 +514,7 @@ static Handle<Value> Dispose(const Arguments& args)
 
 namespace tmpl {
 
-static Handle<Value> Initialize(const Arguments& args)
+static Handle<Value> New(const Arguments& args)
 {
     HandleScope scope;
     TCTMPL *tmpl = tctmplnew();
@@ -427,6 +577,7 @@ static Handle<Value> Dispose(const Arguments& args)
     Local<Value> field = args.This()->GetInternalField(0);
     TCTMPL *tmpl = reinterpret_cast<TCTMPL *>(Local<External>::Cast(field)->Value());
     tctmpldel(tmpl);
+    //printf("tctmpl deleted\n");
     return scope.Close(True());
 }
 
@@ -436,34 +587,31 @@ static Handle<Value> Dispose(const Arguments& args)
 
 extern "C" {
     
-Handle<String> getName()
-{
-    HandleScope scope;
-    Handle<String> name = String::New("@v8com/tokyocabinet;1");
-    return scope.Close(name);
-}
-
 Handle<ObjectTemplate> createObject()
 {
     HandleScope handle_scope;
     Handle<ObjectTemplate> tc = ObjectTemplate::New();
 
-    Handle<FunctionTemplate> tdb = FunctionTemplate::New(tc::tdb::Initialize);
+    Handle<FunctionTemplate> tdb = FunctionTemplate::New(tc::tdb::New);
     tdb->SetClassName(String::New("TDB"));
     tdb->Set(String::New("OWRITER"), Integer::New(TDBOWRITER));
     tdb->Set(String::New("OREADER"), Integer::New(TDBOREADER));
     tdb->Set(String::New("OCREAT"), Integer::New(TDBOCREAT));
+    tdb->Set(String::New("QPOUT"), Integer::New(TDBQPOUT));
+    tdb->Set(String::New("QPPUT"), Integer::New(TDBQPPUT));
+    tdb->Set(String::New("QPSTOP"), Integer::New(TDBQPSTOP));
     Handle<ObjectTemplate> tdbInstance = tdb->InstanceTemplate();
     tdbInstance->SetInternalFieldCount(1);
     Handle<ObjectTemplate> tdbPrototype = tdb->PrototypeTemplate();
     tdbPrototype->Set(String::New("open"), FunctionTemplate::New(tc::tdb::Open));
     tdbPrototype->Set(String::New("close"), FunctionTemplate::New(tc::tdb::Close));
+    tdbPrototype->Set(String::New("get"), FunctionTemplate::New(tc::tdb::Get));
     tdbPrototype->Set(String::New("put"), FunctionTemplate::New(tc::tdb::Put));
     tdbPrototype->Set(String::New("dispose"), FunctionTemplate::New(tc::tdb::Dispose));
     //tdbPrototype->Set(String::New("search"), FunctionTemplate::New(tc::tdb::Search));
     tc->Set(String::New("TDB"), tdb);
 
-    Handle<FunctionTemplate> tdbqry = FunctionTemplate::New(tc::tdbqry::Initialize);
+    Handle<FunctionTemplate> tdbqry = FunctionTemplate::New(tc::tdbqry::New);
     tdbqry->SetClassName(String::New("TDBQRY"));
     tdbqry->Set(String::New("QCSTREQ"), Integer::New(TDBQCSTREQ));
     tdbqry->Set(String::New("QCSTRINC"), Integer::New(TDBQCSTRINC));
@@ -480,17 +628,21 @@ Handle<ObjectTemplate> createObject()
     tdbqry->Set(String::New("QCNUMLT"), Integer::New(TDBQCNUMLT));
     tdbqry->Set(String::New("QONUMASC"), Integer::New(TDBQONUMASC));
     tdbqry->Set(String::New("QONUMDESC"), Integer::New(TDBQONUMDESC));
+    tdbqry->Set(String::New("MSUNION"), Integer::New(TDBMSUNION));
     Handle<ObjectTemplate> qryInstance = tdbqry->InstanceTemplate();
     qryInstance->SetInternalFieldCount(2);
     Handle<ObjectTemplate> qryPrototype = tdbqry->PrototypeTemplate();
     qryPrototype->Set(String::New("addcond"), FunctionTemplate::New(tc::tdbqry::AddCond));
+    qryPrototype->Set(String::New("proc"), FunctionTemplate::New(tc::tdbqry::Proc));
+    qryPrototype->Set(String::New("searchout"), FunctionTemplate::New(tc::tdbqry::SearchOut));
     qryPrototype->Set(String::New("search"), FunctionTemplate::New(tc::tdbqry::Search));
     qryPrototype->Set(String::New("setlimit"), FunctionTemplate::New(tc::tdbqry::SetLimit));
     qryPrototype->Set(String::New("setorder"), FunctionTemplate::New(tc::tdbqry::SetOrder));
+    qryPrototype->Set(String::New("metasearch"), FunctionTemplate::New(tc::tdbqry::MetaSearch));
     qryPrototype->Set(String::New("dispose"), FunctionTemplate::New(tc::tdbqry::Dispose));
     tc->Set(String::New("TDBQRY"), tdbqry);
 
-    Local<FunctionTemplate> tmpl = FunctionTemplate::New(tc::tmpl::Initialize);
+    Local<FunctionTemplate> tmpl = FunctionTemplate::New(tc::tmpl::New);
     tmpl->SetClassName(String::New("TMPL"));
     Local<ObjectTemplate> tmplInstance = tmpl->InstanceTemplate();
     tmplInstance->SetInternalFieldCount(1);
@@ -503,27 +655,35 @@ Handle<ObjectTemplate> createObject()
 
     Local<ObjectTemplate> util = ObjectTemplate::New();
 
-    Local<FunctionTemplate> tclist = FunctionTemplate::New(tc::util::tclist::Initialize);
+    Local<FunctionTemplate> tclist = FunctionTemplate::New(tc::util::tclist::New);
     tclist->SetClassName(String::New("TCLIST"));
     Local<ObjectTemplate> tclistInstance = tclist->InstanceTemplate();
     tclistInstance->SetInternalFieldCount(1);
     Local<ObjectTemplate> tclistPrototype = tclist->PrototypeTemplate();
+    tclistPrototype->Set(String::New("push"), FunctionTemplate::New(tc::util::tclist::Push));
+    tclistPrototype->Set(String::New("pushList"), FunctionTemplate::New(tc::util::tclist::PushList));
     tclistPrototype->Set(String::New("pushMap"), FunctionTemplate::New(tc::util::tclist::PushMap));
     tclistPrototype->Set(String::New("dispose"), FunctionTemplate::New(tc::util::tclist::Dispose));
-    tclistPrototype->Set(String::New("dump"), FunctionTemplate::New(tc::util::tclist::Dump));
+    //tclistPrototype->Set(String::New("dump"), FunctionTemplate::New(tc::util::tclist::Dump));
 
-    Local<FunctionTemplate> tcmap = FunctionTemplate::New(tc::util::tcmap::Initialize);
+    //Local<FunctionTemplate> tcmap = FunctionTemplate::New(tc::util::tcmap::New);
+    Local<FunctionTemplate> tcmap = FunctionTemplate::New(tc::util::tcmap::New);
     tcmap->SetClassName(String::New("TCMAP"));
     Local<ObjectTemplate> tcmapInstance = tcmap->InstanceTemplate();
     tcmapInstance->SetInternalFieldCount(1);
     Local<ObjectTemplate> tcmapPrototype = tcmap->PrototypeTemplate();
+    tcmapPrototype->Set(String::New("get"), FunctionTemplate::New(tc::util::tcmap::Get));
     tcmapPrototype->Set(String::New("put"), FunctionTemplate::New(tc::util::tcmap::Put));
     tcmapPrototype->Set(String::New("putList"), FunctionTemplate::New(tc::util::tcmap::PutList));
+    tcmapPrototype->Set(String::New("putMap"), FunctionTemplate::New(tc::util::tcmap::PutMap));
     tcmapPrototype->Set(String::New("dispose"), FunctionTemplate::New(tc::util::tcmap::Dispose));
+    tc::util::tcmap::__template__ = Persistent<ObjectTemplate>::New(tcmapInstance);
 
     util->Set(String::New("TCLIST"), tclist);
     util->Set(String::New("TCMAP"), tcmap);
     util->Set(String::New("b64encode"), FunctionTemplate::New(tc::util::Base64Encode));
+    util->Set(String::New("urlencode"), FunctionTemplate::New(tc::util::UrlEncode));
+    util->Set(String::New("urldecode"), FunctionTemplate::New(tc::util::UrlDecode));
     tc->Set(String::New("util"), util);
 
     return handle_scope.Close(tc);
