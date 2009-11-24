@@ -277,24 +277,41 @@ static Handle<Value> Put(const Arguments& args)
 {
     HandleScope scope;
     String::Utf8Value pkey(args[0]);
-    Handle<Object> cols = Handle<Object>::Cast(args[1]);
-    Handle<Array> names = cols->GetPropertyNames();
-    TCMAP *map = tcmapnew();
+    Local<Object> cols = Local<Object>::Cast(args[1]);
+    Local<Array> names = cols->GetPropertyNames();
+    Local<Value> retv;
+    TCMAP *map;
     unsigned int i;
+    bool putres;
+
+    map = tcmapnew();
 
     for (i = 0; i < names->Length(); i++) {
         Handle<Value> key = names->Get(Integer::New(i));
         Handle<Value> value =  cols->Get(key);
         tcmapput2(map, *String::Utf8Value(key), *String::Utf8Value(value));
     }
+
     Handle<Value> field = args.This()->GetInternalField(0);
     TCTDB *tdb = reinterpret_cast<TCTDB *>(Handle<External>::Cast(field)->Value());
-    if (!tctdbput(tdb, *pkey, sizeof(*pkey), map)) {
-        tcmapdel(map);
-        return False();
+
+    if (args[0]->IsNull()) {
+        char pkbuf[256];
+        int pksiz;
+        pksiz = sprintf(pkbuf, "%ld", static_cast<long>(tctdbgenuid(tdb)));
+        putres = tctdbput(tdb, pkbuf, pksiz, map);
+        retv = String::New(pkbuf, pksiz);
+    } else {
+        putres = tctdbput(tdb, *pkey, pkey.length(), map);
+        retv = args[0];
     }
     tcmapdel(map);
-    return True();
+
+    if (!putres) {
+        return Undefined();
+    }
+
+    return retv;
 }
 
 static Handle<Value> Close(const Arguments& args)
@@ -465,14 +482,14 @@ static Handle<Value> MetaSearch(const Arguments& args)
 
     qrys[0] = qry;
 
-    for (int i = 1; i < num_qrys; i++) {
+    for (int i = 0; i < num_qrys; i++) {
         Local<Value> x = Local<Object>::Cast(others->Get(Integer::New(i)))->GetInternalField(0);
-        qrys[i] = static_cast<TDBQRY *>(Local<External>::Cast(x)->Value());
+        qrys[i+1] = static_cast<TDBQRY *>(Local<External>::Cast(x)->Value());
     }
 
     field = args.This()->GetInternalField(1);
     TCTDB *tdb = static_cast<TCTDB *>(Local<External>::Cast(field)->Value());
-    TCLIST *keys = tctdbmetasearch(qrys, num_qrys, type);
+    TCLIST *keys = tctdbmetasearch(qrys, num_qrys+1, type);
     int length, ksiz;
     const char *kbuf, *name;
     TCMAP *cols;
