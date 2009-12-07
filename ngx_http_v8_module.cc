@@ -4,18 +4,14 @@ extern "C" {
 #include <ngx_http.h>
 #include <nginx.h>
 
+#include <sys/mman.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <pthread.h>
-#include <sys/types.h>
-#include <sys/event.h>
-#include <sys/time.h>
-}
-//#define V8_TARGET_ARCH_X64 1
-#include <v8.h>
-//#include <../src/v8.h>
 #include <dlfcn.h>
-#include <iostream>
+}
+#include <v8.h>
+#include <v8-debug.h>
+//#include <../src/v8.h>
+//#include <iostream>
 
 using namespace std;
 using namespace v8;
@@ -26,6 +22,7 @@ static char *ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static char *ngx_http_v8com(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void *ngx_http_v8_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+static ngx_int_t ngx_http_v8_init_process(ngx_cycle_t *cycle);
 static Handle<Value> Log(const Arguments& args);
 static Handle<Value> BindPool(const Arguments& args);
 static Handle<Value> ReadBody(const Arguments& args);
@@ -48,14 +45,6 @@ typedef struct {
     size_t size;
 } brigade_t;
 
-/*typedef struct {
-    int kq;
-    int num_files;
-    int markfd;
-    const char **files;
-    pthread_t *thr;
-} poll_file_t;*/
-
 typedef struct {
     Persistent<Context> context;
     Persistent<Function> process;
@@ -63,7 +52,6 @@ typedef struct {
     Persistent<ObjectTemplate> interfaces;
     Persistent<ObjectTemplate> request_tmpl;
     Persistent<ObjectTemplate> response_tmpl;
-    //poll_file_t *poll_file;
 } ngx_http_v8_loc_conf_t;
 
 typedef struct {
@@ -112,13 +100,19 @@ ngx_module_t  ngx_http_v8_module = {
     NGX_HTTP_MODULE,               /* module type */
     NULL,                          /* init master */
     NULL,                          /* init module */
-    NULL,                          /* init process */
+    ngx_http_v8_init_process,                          /* init process */
     NULL,                          /* init thread */
     NULL,                          /* exit thread */
     NULL,                          /* exit process */
     NULL,                          /* exit master */
     NGX_MODULE_V1_PADDING
 };
+
+ngx_int_t ngx_http_v8_init_process(ngx_cycle_t *cycle)
+{
+    Debug::EnableAgent("ngxv8", 5858);
+    return 0;
+}
 
 /*
 namespace xhr {
@@ -177,7 +171,7 @@ static Handle<Value> GetArgs(Local<String> name,
     return String::New(reinterpret_cast<const char*>(args.data), args.len);
 }
 
-static Handle<Value> GetBody(Local<String> name,
+static Handle<Value> GetBodyBuf(Local<String> name,
                       const AccessorInfo& info)
 {
     size_t len;
@@ -197,19 +191,31 @@ static Handle<Value> GetBody(Local<String> name,
     return String::New(reinterpret_cast<const char *>(r->request_body->bufs->buf->pos), len);
 }
 
-static Handle<Value> GetBodyFile(Local<String> name,
+static Handle<Value> GetBodyFileOrBuf(Local<String> name,
                       const AccessorInfo& info)
 {
-    ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
-    ngx_str_t *temp;
+    ngx_http_request_t  *r;
+    char                *data;
+    int                 fd;
+    off_t               len;
+
+    r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
 
     if (r->request_body == NULL
         || r->request_body->temp_file == NULL) {
-        return Undefined();
+        return GetBodyBuf(name, info);
     }
 
-    temp = &r->request_body->temp_file->file.name;
-    return String::New(reinterpret_cast<const char*>(temp->data), temp->len);
+    fd = r->request_body->temp_file->file.fd;
+    len = r->headers_in.content_length_n;
+
+    data = static_cast<char*>(mmap(NULL, len, PROT_READ, MAP_PRIVATE, fd, 0));
+
+    HandleScope scope;
+    Local<String> b = String::New(data, len);
+    munmap(data, len);
+
+    return scope.Close(b);
 }
 
 static Handle<Value> GetVariable(const Arguments& args)
@@ -223,10 +229,10 @@ static Handle<Value> GetVariable(const Arguments& args)
 
     HandleScope scope;
     String::AsciiValue name(args[0]);
-    len = strlen(*name);
-    r = static_cast<ngx_http_request_t *>(Unwrap(args.This(), 0));
-    lowcase = static_cast<u_char *>(ngx_pnalloc(r->pool, len));
-    p = reinterpret_cast<u_char *>(*name);
+    len = name.length();
+    r = static_cast<ngx_http_request_t*>(Unwrap(args.This(), 0));
+    lowcase = static_cast<u_char*>(ngx_pnalloc(r->pool, len));
+    p = reinterpret_cast<u_char*>(*name);
     hash = ngx_hash_strlow(lowcase, p, len);
     var.len = len;
     var.data = lowcase;
@@ -235,7 +241,7 @@ static Handle<Value> GetVariable(const Arguments& args)
     if (vv->not_found) {
         return Undefined();
     }
-    return String::New(reinterpret_cast<const char *>(vv->data), vv->len);
+    return String::New(reinterpret_cast<const char*>(vv->data), vv->len);
 }
 
 static Handle<Value> GetRespContentType(Local<String> name,
@@ -252,7 +258,7 @@ void SetRespContentType(Local<String> name,
 {
     ngx_http_request_t *r = static_cast<ngx_http_request_t*>(Unwrap(info.Holder(), 0));
     String::Utf8Value value(val);
-    size_t len = strlen(*value);
+    size_t len = value.length();
     u_char *p = static_cast<u_char*>(ngx_pnalloc(r->pool, len));
     ngx_memcpy(p, *value, len);
     r->headers_out.content_type.data = p;
@@ -268,8 +274,7 @@ static Local<ObjectTemplate> MakeRequestTemplate()
     result->SetAccessor(String::NewSymbol("method"), GetMethod);
     result->SetAccessor(String::NewSymbol("userAgent"), GetUserAgent);
     result->SetAccessor(String::NewSymbol("args"), GetArgs);
-    result->SetAccessor(String::NewSymbol("body"), GetBody);
-    result->SetAccessor(String::NewSymbol("bodyFile"), GetBodyFile);
+    result->SetAccessor(String::NewSymbol("body"), GetBodyFileOrBuf);
     result->Set(String::New("$"), FunctionTemplate::New(GetVariable));
     result->Set(String::New("bind"), FunctionTemplate::New(BindPool));
     result->Set(String::New("readBody"), FunctionTemplate::New(ReadBody));
@@ -320,6 +325,7 @@ static void *Unwrap(Handle<Object> obj, int field)
     return Handle<External>::Cast(obj->GetInternalField(field))->Value();
 }
 
+
 static
 ngx_int_t ngx_http_v8_call_handler(
     ngx_http_request_t *r,
@@ -343,7 +349,8 @@ ngx_int_t ngx_http_v8_call_handler(
     if (trycatch.HasCaught()) {
         Local<Value> st = trycatch.StackTrace();
         String::AsciiValue st_str(st);
-        cerr << *st_str << endl;
+        fprintf(stderr, "call: %s\n", *st_str);
+        //cerr << *st_str << endl;
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
@@ -356,9 +363,6 @@ ngx_int_t ngx_http_v8_call_handler(
     }
 
     //internal::Heap::CollectAllGarbage(false);
-    /*ngx_int_t x = static_cast<ngx_int_t>(result->Int32Value());
-    printf("%d\n", x);
-    return x;*/
     return static_cast<ngx_int_t>(result->Int32Value());
 }
 
@@ -371,7 +375,6 @@ ngx_http_v8_handler_request(ngx_http_request_t *r)
     ngx_http_v8_loc_conf_t  *v8lcf;
     Persistent<Function>    fun;
 
-    //printf("ngx_http_v8_handler_request\n");
     b.size = 0;
     b.head = b.last = NULL;
 
@@ -418,8 +421,6 @@ ngx_http_v8_handler_request(ngx_http_request_t *r)
     if (!(rc == NGX_OK || rc == NGX_HTTP_OK)) {
         r->keepalive = 0;
     }
-
-    //printf("rc=%d\n", rc);
 
     r->headers_out.status = rc;
     if (r->headers_out.content_type.data == NULL) {
@@ -483,7 +484,6 @@ static Handle<Value> BindPool(const Arguments& args)
 
 static Handle<Value> ReadBody(const Arguments& args)
 {
-    //printf("ReadBody\n");
     ngx_http_request_t *r;
     ngx_http_v8_ctx_t *ctx;
 
@@ -500,13 +500,9 @@ static Handle<Value> ReadBody(const Arguments& args)
     // TODO: dispose handle when request finished instead of depending on gc
     ctx->next->fun.MakeWeak(NULL, &HandleDispose);
 
-    //r->request_body_in_file_only = 1;
+    r->request_body_in_single_buf = 1;
     r->request_body_in_persistent_file = 1;
     r->request_body_in_clean_file = 1;
-
-    if (r->request_body_in_file_only) {
-        r->request_body_file_log_level = 0;
-    }
 
     return Integer::New(ngx_http_read_client_request_body(r, ngx_http_v8_handler_request));
 }
@@ -526,7 +522,7 @@ static Handle<Value> Write(const Arguments& args)
     r = static_cast<ngx_http_request_t*>(Unwrap(self, 0));
     bri = static_cast<brigade_t*>(Unwrap(self, 1));
 
-    len = strlen(*value);
+    len = value.length();
     p = static_cast<u_char*>(ngx_pnalloc(r->pool, len));
     ngx_memcpy(p, *value, len);
 
@@ -572,12 +568,12 @@ static Handle<Value> AddResponseHeader(const Arguments& args)
     header = static_cast<ngx_table_elt_t*>(ngx_list_push(&r->headers_out.headers));
     header->hash = 1;
 
-    len = strlen(*key);
+    len = key.length();
     header->key.len = len;
     header->key.data = static_cast<u_char*>(ngx_pnalloc(r->pool, len));
     ngx_memcpy(header->key.data, *key, len);
 
-    len = strlen(*value);
+    len = value.length();
     header->value.len = len;
     header->value.data = static_cast<u_char*>(ngx_pnalloc(r->pool, len));
     ngx_memcpy(header->value.data, *value, len);
@@ -598,7 +594,8 @@ static Handle<Value> Log(const Arguments& args)
     HandleScope scope;
     Handle<Value> arg = args[0];
     String::Utf8Value value(arg);
-    cout << (*value) << endl;
+    printf("%s\n", *value);
+    //cout << (*value) << endl;
     return Undefined();
 }
 
@@ -641,140 +638,57 @@ ngx_http_v8_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     cout << "GC" << endl;
 }*/
 
-static Local<String> read_file(const char* filename) {
-    FILE    *file;
-    size_t  size;
-    char    *chars;
-   
-    file = fopen(filename, "rb");
-
-    if (file == NULL) {
-        return String::New("");
-    }
-
-    fseek(file, 0, SEEK_END);
-    size = ftell(file);
-    rewind(file);
-
-    chars = new char[size + 1];
-    chars[size] = '\0';
-
-    for (int i = 0; i < size;) {
-        int read = fread(&chars[i], 1, size - i, file);
-        i += read;
-    }
-
-    fclose(file);
+static Handle<Value> read_file(const char* filename) {
+    int fd;
+    struct stat sb;
+    unsigned char *bytes;
 
     HandleScope scope;
-    Local<String> result = String::New(chars, size);
-    delete[] chars;
+    
+    if ((fd = open(filename, O_RDONLY)) == -1) {
+        fprintf(stderr, "open: %s: %s\n", strerror(errno), filename);
+        return Null();
+    }
+
+    fstat(fd, &sb);
+
+    bytes = static_cast<unsigned char*>(mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0));
+
+    if (close(fd) != 0) {
+        fprintf(stderr, "close: %s: %s\n", strerror(errno), filename);
+        return Null();
+    }
+
+    Local<String> result = String::New(reinterpret_cast<const char*>(bytes), sb.st_size);
+    munmap(bytes, sb.st_size);
 
     return scope.Close(result);
 }
 
-static void execute_script(const char* file)
+static int execute_script(const char* file)
 {
     HandleScope scope;
 
-    Local<String> source = read_file(file);
-    if (source->Length() == 0) {
-        return;
+    Handle<Value> source = read_file(file);
+    if (!source->IsString() || Handle<String>::Cast(source)->Length() == 0) {
+        return -1;
     }
 
     Local<String> filename = String::New(file);
-    Local<Script> script = Script::Compile(source, filename);
+    Local<Script> script = Script::Compile(Handle<String>::Cast(source), filename);
 
     TryCatch trycatch;
     Local<Value> result = script->Run();
     if (trycatch.HasCaught()) {
         Local<Value> st = trycatch.StackTrace();
         String::AsciiValue st_str(st);
-        cerr << *st_str << endl;
+        fprintf(stderr, "run: %s\n", *st_str);
+        return -1;
     }
 
     scope.Close(result);
+    return 0;
 }
-
-/*static int register_event(int kq, struct kevent *kev, const char *filename, bool read)
-{
-    int fd, i;
-
-    for (i = 0; i < 3; i++) {
-        if ((fd = open(filename, O_RDONLY)) > 0) {
-            break;
-        }
-        printf("retry open\n");
-        usleep(100000);
-    }
-
-    if (fd < 0) {
-        return fd;
-    }
-
-    EV_SET(kev, fd, EVFILT_VNODE, EV_ADD, NOTE_RENAME, 0, const_cast<char*>(filename));
-    kevent(kq, kev, 1, NULL, 0, NULL);
-    if (read) {
-        EV_SET(kev, fd, EVFILT_READ, EV_ADD, 0, 0, const_cast<char*>(filename));
-        kevent(kq, kev, 1, NULL, 0, NULL);
-    }
-
-    printf("registered %s(%d)\n", filename, fd);
-
-    return fd;
-}
-
-static void* poll_file(void *ctx)
-{
-    ngx_http_v8_loc_conf_t  *v8lcf;
-    poll_file_t             *poll_file;
-    const char              *filename;
-    int                     i, j, n, fd;
-    
-    //poll_file = static_cast<poll_file_t*>(ctx);
-    v8lcf = static_cast<ngx_http_v8_loc_conf_t*>(ctx);
-    poll_file = v8lcf->poll_file;
-    struct kevent kev[poll_file->num_files];
-    int fds[poll_file->num_files];
-
-    for (i = 0; i < poll_file->num_files; i++) {
-        if ((fds[i] = register_event(poll_file->kq, &kev[i], poll_file->files[i], true)) < 0) {
-            printf("first registration fail: %s\n", poll_file->files[i]);
-            return NULL;
-        }
-        lseek(fds[i], 0, SEEK_END);
-    }
-    poll_file->markfd = fds[0];
-
-    while (true) {
-        n = kevent(poll_file->kq, NULL, 0, kev, poll_file->num_files, NULL);
-        for (i = 0; i < n; i++) {
-            if (!(kev[i].fflags & NOTE_RENAME)) {
-                printf("reschedule\n");
-                for (j = 0; j < poll_file->num_files; j++) {
-                    close(fds[j]);
-                }
-                return NULL;
-            }
-            close(kev[i].ident);
-            filename = static_cast<const char*>(kev[i].udata);
-            printf("modify detected: %s\n", filename);
-            
-            //v8lcf->context = Context::New(NULL, v8lcf->global);
-            Context::Scope context_scope(v8lcf->context);
-            v8::Locker locker;
-            execute_script(filename);
-            v8::Unlocker unlocker;
-
-            fd = register_event(poll_file->kq, &kev[i], filename, false);
-            if (fd < 0) {
-                printf("re-registration fail: %s\n", filename);
-            }
-        }
-    }
-
-    return NULL;
-}*/
 
 static char *
 ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
@@ -782,7 +696,6 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ngx_http_v8_loc_conf_t      *v8lcf;
     ngx_http_core_loc_conf_t    *clcf;
     ngx_str_t                   *value;
-    //poll_file_t                 *pf;
     const char                  *filename;
 
     v8lcf = static_cast<ngx_http_v8_loc_conf_t *>(conf);
@@ -794,6 +707,7 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     HandleScope scope;
     if (v8lcf->context.IsEmpty()) {
+        V8::SetFlagsFromString("--expose_debug_as debug", strlen("--expose_debug_as debug"));
         Local<ObjectTemplate> global = ObjectTemplate::New();
         Local<ObjectTemplate> components = ObjectTemplate::New();
         global->Set(String::New("log"), FunctionTemplate::New(Log));
@@ -823,35 +737,9 @@ ngx_http_v8(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     Context::Scope context_scope(v8lcf->context);
     //V8::SetGlobalGCEpilogueCallback(GCCall);
     filename = reinterpret_cast<const char*>(value[1].data);
-    execute_script(filename);
-
-    /*if (v8lcf->poll_file == NULL) {
-        pf = new poll_file_t();
-        pf->kq = kqueue();
-        pf->thr = new pthread_t();
-        pf->num_files = 1;
-        pf->files = new const char*[1];
-        pf->files[0] = filename;
-        v8lcf->poll_file = pf;
-        pthread_create(pf->thr, NULL, poll_file, v8lcf);
-    } else {
-        pf = v8lcf->poll_file;
-        lseek(pf->markfd, 0, SEEK_SET);
-        printf("wait for join\n");
-        pthread_join(*pf->thr, NULL);
-        printf("joined\n");
-        pf->num_files += 1;
-        const char **renew = new const char*[pf->num_files];
-        // memcpy
-        for (int i = 0; i < pf->num_files - 1; i++) {
-            renew[i] = pf->files[i];
-        }
-        delete[] pf->files;
-        renew[pf->num_files - 1] = filename;
-        pf->files = renew;
-        v8lcf->poll_file = pf;
-        pthread_create(pf->thr, NULL, poll_file, v8lcf);
-    }*/
+    if (execute_script(filename) == -1) {
+        return static_cast<char*>(NGX_CONF_ERROR);
+    }
 
     if (v8lcf->process.IsEmpty() &&
         v8lcf->context->Global()->Has(String::New("process"))) {
@@ -885,7 +773,10 @@ ngx_http_v8com(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     Handle<String> name = String::New(reinterpret_cast<const char*>(value[1].data));
-    handle = dlopen(reinterpret_cast<const char*>(value[2].data), RTLD_LAZY);
+    if ((handle = dlopen(reinterpret_cast<const char*>(value[2].data), RTLD_LAZY)) == NULL) {
+        fprintf(stderr, "dlopen: %s: %s\n", dlerror(), value[2].data);
+        return static_cast<char*>(NGX_CONF_ERROR);
+    }
     Handle<Template>(*createObject)();
 
     createObject = reinterpret_cast<Handle<Template> (*)()>(dlsym(handle, "createObject"));
