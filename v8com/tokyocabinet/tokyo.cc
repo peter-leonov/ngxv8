@@ -221,6 +221,25 @@ static Handle<Value> UrlDecode(const Arguments& args)
     return scope.Close(rv);
 }
 
+static Handle<Value> WwwFormDecode(const Arguments& args)
+{
+    const char *name;
+    TCMAP *map = tcmapnew();
+    HandleScope scope;
+    String::Utf8Value src(args[0]);
+    String::AsciiValue type(args[1]);
+    Local<Object> result = Object::New();
+
+    tcwwwformdecode2(*src, src.length(), *type, map);
+    tcmapiterinit(map);
+    while ((name = tcmapiternext2(map)) != NULL) {
+        result->Set(String::New(name), String::New(tcmapget2(map, name)));
+    }
+    tcmapdel(map);
+
+    return result;
+}
+
 } // end namespace util
 
 namespace tdb {
@@ -261,9 +280,8 @@ static Handle<Value> Get(const Arguments& args)
     TCTDB *tdb = reinterpret_cast<TCTDB *>(Handle<External>::Cast(field)->Value());
     TCMAP *cols = tctdbget(tdb, *pkey, pkey.length());
     const char *name;
-    Local<Object> map;
+    Local<Object> map = Object::New();
     if (cols) {
-        map = Object::New();
         tcmapiterinit(cols);
         while ((name = tcmapiternext2(cols)) != NULL) {
             map->Set(String::New(name), String::New(tcmapget2(cols, name)));
@@ -356,7 +374,6 @@ int ProcCallback(const void *pkbuf, int pksiz, TCMAP *cols, void *op)
     map->SetInternalField(0, External::New(cols));
     function_t *f = static_cast<function_t *>(op);
     Local<Object> global = Context::GetCurrent()->Global();
-    //Local<Value> argv[2] = { String::New(static_cast<const char *>(pkbuf), pksiz), map };
     Local<Value> argv[2] = { String::New(static_cast<const char *>(pkbuf)), map };
     Local<Value> rv = f->fun->Call(global, 2, argv);
     return rv->Int32Value();
@@ -643,6 +660,8 @@ Handle<ObjectTemplate> createObject()
     tdbqry->Set(String::New("QCNUMGT"), Integer::New(TDBQCNUMGT));
     tdbqry->Set(String::New("QCNUMLE"), Integer::New(TDBQCNUMLE));
     tdbqry->Set(String::New("QCNUMLT"), Integer::New(TDBQCNUMLT));
+    tdbqry->Set(String::New("QOSTRASC"), Integer::New(TDBQOSTRASC));
+    tdbqry->Set(String::New("QOSTRDESC"), Integer::New(TDBQOSTRDESC));
     tdbqry->Set(String::New("QONUMASC"), Integer::New(TDBQONUMASC));
     tdbqry->Set(String::New("QONUMDESC"), Integer::New(TDBQONUMDESC));
     tdbqry->Set(String::New("MSUNION"), Integer::New(TDBMSUNION));
@@ -701,6 +720,7 @@ Handle<ObjectTemplate> createObject()
     util->Set(String::New("b64encode"), FunctionTemplate::New(tc::util::Base64Encode));
     util->Set(String::New("urlencode"), FunctionTemplate::New(tc::util::UrlEncode));
     util->Set(String::New("urldecode"), FunctionTemplate::New(tc::util::UrlDecode));
+    util->Set(String::New("wwwformdecode"), FunctionTemplate::New(tc::util::WwwFormDecode));
     tc->Set(String::New("util"), util);
 
     return handle_scope.Close(tc);
