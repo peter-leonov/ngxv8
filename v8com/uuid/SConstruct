@@ -8,8 +8,11 @@ LIBPATH = [
 
 LIBS = [
     'v8',
-    'stdc++'
+    'stdc++',
+    #'uuid',
 ]
 
-env = Environment(CCFLAGS='-arch x86_64 -m64 -Wall -O2', CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env = Environment(CCFLAGS='-m64 -Wall -O2', CPPPATH=CPPPATH,
+                  LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
 env.SharedLibrary('uuid', ['uuid.cc'])
+env.Program('test', ['uuid.os', 'test.cc'])
