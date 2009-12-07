@@ -9,10 +9,9 @@ LIBPATH = [
 
 LIBS = [
     'v8',
-    #'ssl',
     'crypto',
     'stdc++'
 ]
 
-env = Environment(CCFLAGS='-arch x86_64 -m64', CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env = Environment(CCFLAGS='-m64 -Wall -O2', CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
 env.SharedLibrary('hmac', ['hmac.cc'])

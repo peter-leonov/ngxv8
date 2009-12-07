@@ -7,24 +7,35 @@ using namespace v8;
 
 namespace hmac {
 
-static Handle<Value> Sha1(const Arguments& args)
+static Handle<Value> New(const EVP_MD *evp, const Arguments& args)
 {
+    unsigned int    i;
+    unsigned char   md[EVP_MAX_MD_SIZE];
+    unsigned int    md_len;
+
     HandleScope scope;
+
     String::AsciiValue key(args[0]);
     String::Utf8Value d(args[1]);
-    const char *_key = *key;
-    const unsigned char *_d = reinterpret_cast<const unsigned char *>(*d);
-    unsigned char *md = static_cast<unsigned char *>(malloc(EVP_MAX_MD_SIZE));
-    unsigned int md_len;
-    HMAC(EVP_sha1(), _key, strlen(_key), _d, strlen(*d), md, &md_len);
-    free(md);
-    //Handle<String> ret = String::New(reinterpret_cast<const char *>(md), md_len);
-    int i = 0;
+    HMAC(evp, *key, key.length(),
+         reinterpret_cast<const unsigned char*>(*d), d.length(), md, &md_len);
+
     Handle<Array> result = Array::New(md_len);
-    for (i; i < md_len; i++) {
+    for (i = 0; i < md_len; i++) {
         result->Set(Number::New(i), Number::New(md[i]));
     }
+
     return scope.Close(result);
+}
+
+static Handle<Value> NewSha1(const Arguments& args)
+{
+    return New(EVP_sha1(), args);
+}
+
+static Handle<Value> NewMd5(const Arguments& args)
+{
+    return New(EVP_md5(), args);
 }
 
 } // end namespace hmac
@@ -42,7 +53,8 @@ Handle<ObjectTemplate> createObject()
 {
     HandleScope handle_scope;
     Handle<ObjectTemplate> hmac = ObjectTemplate::New();
-    hmac->Set(String::New("sha1"), FunctionTemplate::New(hmac::Sha1));
+    hmac->Set(String::New("sha1"), FunctionTemplate::New(hmac::NewSha1));
+    hmac->Set(String::New("md5"), FunctionTemplate::New(hmac::NewMd5));
     return handle_scope.Close(hmac);
 }
 
