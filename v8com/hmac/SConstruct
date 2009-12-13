@@ -1,0 +1,17 @@
+CPPPATH = [
+    '/Users/rykomats/sandbox/v8/include',
+]
+
+LIBPATH = [
+    '/Users/rykomats/sandbox/v8',
+    '/usr/lib',
+]
+
+LIBS = [
+    'v8',
+    'crypto',
+    'stdc++'
+]
+
+env = Environment(CCFLAGS='-m64 -Wall -O2', CPPPATH=CPPPATH, LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env.SharedLibrary('hmac', ['hmac.cc'])

@@ -1,0 +1,18 @@
+CPPPATH = [
+    '/Users/rykomats/sandbox/v8/include',
+]
+
+LIBPATH = [
+    '/Users/rykomats/sandbox/v8',
+]
+
+LIBS = [
+    'v8',
+    'stdc++',
+    #'uuid',
+]
+
+env = Environment(CCFLAGS='-m64 -Wall -O2', CPPPATH=CPPPATH,
+                  LIBPATH=LIBPATH, LIBS=LIBS, SHLIBPREFIX='')
+env.SharedLibrary('uuid', ['uuid.cc'])
+env.Program('test', ['uuid.os', 'test.cc'])
